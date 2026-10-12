@@ -250,7 +250,7 @@ export class World{
     ];
     for(const [x,y,z,s] of spots){
       statics.push({ geo:new RoundedBoxGeometry(s,s,s,2,s*0.18), mat, pos:[x,y,z], rotY:Math.random()*1.5 });
-      statics.push({ geo:new THREE.SphereGeometry(s*0.22,10,8), glowMat, pos:[x+s*0.3,y+s*0.42,z] });
+      statics.push({ geo:new THREE.SphereGeometry(s*0.22,10,8), mat:glowMat, pos:[x+s*0.3,y+s*0.42,z] });
     }
   }
 
