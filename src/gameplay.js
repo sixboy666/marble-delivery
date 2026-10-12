@@ -53,6 +53,7 @@ export class Game{
     this._sel = null;            // selected uid
 
     this._finishTimer = null;
+    this._pendingResult = null;  // {type:'finish',time}|{type:'fail'} awaiting its timer
 
     this.$ = id => document.getElementById(id);
     this._bindInput();
@@ -62,7 +63,7 @@ export class Game{
   // level lifecycle
   // ----------------------------------------------------------
   startLevel(level){
-    if(this._finishTimer){ clearTimeout(this._finishTimer); this._finishTimer = null; }
+    if(this._finishTimer){ clearTimeout(this._finishTimer); this._finishTimer = null; this._pendingResult = null; }
     this.level = level;
     this.placements = [];
     this.nextUid = 1;
@@ -98,7 +99,7 @@ export class Game{
   resetLevel(){
     if(!this.level) return;
     Sound.tap();
-    if(this._finishTimer){ clearTimeout(this._finishTimer); this._finishTimer = null; }
+    if(this._finishTimer){ clearTimeout(this._finishTimer); this._finishTimer = null; this._pendingResult = null; }
     // keep placements — restart means "try the run again"
     this.phys.compile(this.level, this.placements);
     this._placeBallAtChute();
@@ -119,7 +120,7 @@ export class Game{
   }
 
   abortLevel(){
-    if(this._finishTimer){ clearTimeout(this._finishTimer); this._finishTimer = null; }
+    if(this._finishTimer){ clearTimeout(this._finishTimer); this._finishTimer = null; this._pendingResult = null; }
   }
 
   destroy(){
@@ -139,7 +140,6 @@ export class Game{
     this.$('sel-bar').classList.toggle('show', build && !!this._sel);
     if(this.world.zoneMarker) this.world.zoneMarker.visible = build;
     if(build){
-      this.world.syncBall(...[] || this.phys.pos);
       this.world.syncBall(this.phys.pos, true);
       this.rig.frameLevel(this.level);
     }
@@ -154,6 +154,7 @@ export class Game{
     }
     this._select(null);
     Sound.drop(); vibrate(20);
+    this.phys.compile(this.level, this.placements);   // bake placed modules into physics
     const s = this.level.start;
     _pt.set(s.p[0], s.p[1], s.p[2]);
     this.phys.setBall(_pt, _startVel.set(0,0,-s.v));
@@ -166,7 +167,7 @@ export class Game{
 
   // return to build keeping placements (fail / Edit Track)
   toBuild(){
-    if(this._finishTimer){ clearTimeout(this._finishTimer); this._finishTimer = null; }
+    if(this._finishTimer){ clearTimeout(this._finishTimer); this._finishTimer = null; this._pendingResult = null; }
     this.phys.compile(this.level, this.placements);
     this._placeBallAtChute();
     this.levelTime = 0;
@@ -262,8 +263,10 @@ export class Game{
       this._slowmo(0.3, 0.5);
       this.rig.kick(0.2);
       const time = this.levelTime;
+      this._pendingResult = { type:'finish', time };
       this._finishTimer = setTimeout(()=>{
         this._finishTimer = null;
+        this._pendingResult = null;
         this.hooks.onFinish && this.hooks.onFinish({time});
       }, 900);
     },
@@ -273,8 +276,10 @@ export class Game{
       this.hooks.toast && this.hooks.toast(
         reason === 'fell' ? 'The marble got away! Adjust your track.' :
         reason === 'stuck' ? 'The marble stopped! Keep it moving.' : 'Try again!');
+      this._pendingResult = { type:'fail' };
       this._finishTimer = setTimeout(()=>{
         this._finishTimer = null;
+        this._pendingResult = null;
         this.toBuild();
       }, 800);
     }
@@ -551,14 +556,37 @@ export class Game{
         return pl.uid;
       },
       launch:()=>this.launch(),
+      step:(sec=1)=>{           // deterministic sim advance (rAF-independent)
+        const n = Math.round(sec*60);
+        for(let i=0;i<n && !this.phys.done;i++) this.update(1/60);
+        return this.phys.done;
+      },
+      drain:()=>{               // fire the pending finish/fail transition NOW (no wall-clock wait)
+        if(this._finishTimer){ clearTimeout(this._finishTimer); this._finishTimer = null; }
+        const p = this._pendingResult; this._pendingResult = null;
+        if(!p) return 'none';
+        if(p.type === 'finish'){ this.hooks.onFinish && this.hooks.onFinish({time:p.time}); }
+        else{ this.toBuild(); }
+        return p.type;
+      },
       state:()=>({
         phase:this.phase, time:this.levelTime,
         pos:this.phys.pos.toArray().map(n=>+n.toFixed(3)),
         vel:this.phys.vel.toArray().map(n=>+n.toFixed(3)),
         cap:this.phys.cap ? this.phys.cap.type : null,
         done:this.phys.done
+      }),
+      probe:()=>({
+        phase:this.phase, done:this.phys.done,
+        pend:this._pendingResult ? this._pendingResult.type : null,
+        timer:!!this._finishTimer,
+        placed:this.placements.map(p=>p.type+'@'+p.x+','+p.z+','+p.rot).join('|'),
+        boxes:this.phys.boxes.length, zones:this.phys.zones.length,
+        pos:this.phys.pos.toArray().map(n=>+n.toFixed(2)),
+        vel:this.phys.vel.toArray().map(n=>+n.toFixed(2)),
+        screen:(document.querySelector('.screen.active')||{}).id||'?'
       })
     };
-    console.log('[md] debug hook ready: __md.place / __md.launch / __md.state');
+    console.log('[md] debug hook ready: __md.place / __md.launch / __md.step / __md.state');
   }
 }
