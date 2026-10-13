@@ -313,9 +313,14 @@ function buildLevelGrid(){
 
   for(const ch of CHAPTERS){
     const head = document.createElement('div');
-    head.className = 'chapter-head';
-    head.innerHTML = `<span class="chapter-tag">CHAPTER ${ch.id}</span> ${ch.name}`;
+    head.className = 'chapter-h';
+    head.textContent = `CHAPTER ${ch.id} · ${ch.name}`;
     grid.appendChild(head);
+
+    // cards must live inside a .level-grid wrapper — appending them
+    // straight into the scroll container breaks the 2-column layout
+    const wrap = document.createElement('div');
+    wrap.className = 'level-grid';
 
     for(const id of ch.levels){
       const level = LEVELS.find(l=>l.id===id);
@@ -359,8 +364,9 @@ function buildLevelGrid(){
           enterLevel(level);
         });
       }
-      grid.appendChild(card);
+      wrap.appendChild(card);
     }
+    grid.appendChild(wrap);
   }
 }
 
@@ -412,6 +418,9 @@ function enterLevel(level){
     ? Save.getBest(level.id).toFixed(1)+'s' : '–';
   game.setPaused(false);
   game.startLevel(level);
+  // pre-compile all shaders up front: the first interactive frame should
+  // not pay the one-time GPU program stalls mid-drag
+  try{ renderer.compile(scene, camera); }catch(e){}
   // adaptation warm-up: the first frames compile shaders (one-time GPU
   // stalls). Ignore them so the EMA doesn't wrongly drop the resolution.
   frameEMA = 16.7;
