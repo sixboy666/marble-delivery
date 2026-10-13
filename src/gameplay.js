@@ -54,6 +54,7 @@ export class Game{
 
     this._finishTimer = null;
     this._pendingResult = null;  // {type:'finish',time}|{type:'fail'} awaiting its timer
+    this._lastTimerStr = '';     // HUD timer DOM-write throttle
 
     this.$ = id => document.getElementById(id);
     this._bindInput();
@@ -83,6 +84,7 @@ export class Game{
     this.$('hud-level').textContent = `${level.id} · ${level.name}`;
     this.$('hud-par').textContent = level.par+'s';
     this.$('hud-timer').textContent = '0.0s';
+    this._lastTimerStr = '0.0s';
     this.$('hud-hint').textContent = level.hint;
     this._buildDock();
     this._setPhase('build');
@@ -200,7 +202,11 @@ export class Game{
         if(this.phys.done) break;
       }
       this.world.syncBall(this.phys.pos, this.phys.grounded);
-      this.$('hud-timer').textContent = this.levelTime.toFixed(1)+'s';
+      const tstr = this.levelTime.toFixed(1)+'s';   // write the DOM only on change
+      if(tstr !== this._lastTimerStr){
+        this.$('hud-timer').textContent = tstr;
+        this._lastTimerStr = tstr;
+      }
     }
 
     this.world.update(this.clock, dt);
@@ -327,6 +333,7 @@ export class Game{
   }
 
   _startDockDrag(type, e){
+    if(this._pid !== null) return;    // one pointer at a time
     if(this.placements.length >= this.level.budget){
       Sound.deny();
       this.hooks.toast && this.hooks.toast('Module budget used up!');
@@ -350,8 +357,11 @@ export class Game{
       this._ghost.visible = true;
       this._ghost.position.set(x, 0, z);
       this._ghost.rotation.y = 0;
+      const fp = MODULES[d.type].fp;
+      this._ghost.children[2].scale.set(fp[0],1,fp[1]);
       this._ghost.children[0].material.color.set(ok ? 0x7dffc8 : 0xff5f6f);
       this._ghost.children[1].material.color.set(ok ? 0xffffff : 0xffb3b9);
+      this._ghost.children[2].material.color.set(ok ? 0x7dffc8 : 0xff5f6f);
       this._dragValid = ok;
       this._dragPos = [x,z];
     }else if(d.kind === 'move'){
@@ -365,18 +375,37 @@ export class Game{
       this._ghost.visible = true;
       this._ghost.position.set(x,0,z);
       this._ghost.rotation.y = pl.rot*Math.PI/2;
+      const mfp = MODULES[pl.type].fp;
+      const mw = (pl.rot%2===0) ? mfp[0] : mfp[1];
+      const md = (pl.rot%2===0) ? mfp[1] : mfp[0];
+      this._ghost.children[2].scale.set(mw,1,md);
       this._ghost.children[0].material.color.set(ok ? 0x7dffc8 : 0xff5f6f);
+      this._ghost.children[2].material.color.set(ok ? 0x7dffc8 : 0xff5f6f);
       this._dragValid = ok;
       d.moved = true;
     }
   }
 
-  _endDrag(e){
+  _endDrag(e, cancelled=false){
     const d = this._drag;
     this._drag = null;
     this._pid = null;
     this._ghost.visible = false;
     if(!d) return;
+
+    if(cancelled){
+      // browser took over the gesture (or pointer died) — never place,
+      // and restore a moved module to its last valid spot
+      if(d.kind === 'move'){
+        const pl = this.placements.find(q=>q.uid===d.uid);
+        if(pl){
+          pl.x = d.lastX; pl.z = d.lastZ;
+          const g = this.world.moduleGroups.get(pl.uid);
+          if(g) g.position.set(pl.x,0,pl.z);
+        }
+      }
+      return;
+    }
 
     if(d.kind === 'new'){
       if(this._dragValid){
@@ -491,18 +520,24 @@ export class Game{
     };
     const up = e=>{
       if(e.pointerId !== this._pid) return;
-      this._endDrag(e);
-      e.preventDefault();
+      this._endDrag(e, false);
+    };
+    const cancel = e=>{
+      if(e.pointerId !== this._pid) return;
+      this._endDrag(e, true);
     };
     cv.addEventListener('pointerdown', down);
-    cv.addEventListener('pointermove', move);
-    cv.addEventListener('pointerup', up);
-    cv.addEventListener('pointercancel', up);
+    // move/up live on window: drags start on the dock (DOM) but travel over
+    // the canvas — window listeners fire regardless of which element has
+    // pointer capture, which cross-element setPointerCapture cannot guarantee.
+    window.addEventListener('pointermove', move, {passive:false});
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', cancel);
     this._unbind = ()=>{
       cv.removeEventListener('pointerdown', down);
-      cv.removeEventListener('pointermove', move);
-      cv.removeEventListener('pointerup', up);
-      cv.removeEventListener('pointercancel', up);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
     };
   }
 
