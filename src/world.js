@@ -74,7 +74,8 @@ export class World{
     this._mats = {};
 
     // sky + distant ground
-    this.scene.background = new THREE.Color(this.pal.bg);
+    this.scene.background = skyTexture(this.pal.bg);
+    if(this.scene.fog) this.scene.fog.color.set(this.pal.bg);
     const gnd = new THREE.Mesh(
       new THREE.PlaneGeometry(140,140),
       this._m(this.pal.ground, {roughness:1})
@@ -90,8 +91,12 @@ export class World{
       const w=f.s[0], d=f.s[1];
       statics.push({ geo:new RoundedBoxGeometry(w,0.6,d,2,0.1),
         mat:this._m(this.pal.slab,{roughness:0.85}), cast:false });
+      // patterned top surface (per-theme canvas texture, tinted by palette)
+      const ft = floorTexture(level.theme, this.pal.slabTop).clone();
+      ft.needsUpdate = true;
+      ft.repeat.set(Math.max(1,Math.round(w/2.5)), Math.max(1,Math.round(d/2.5)));
       const top = new THREE.Mesh(new RoundedBoxGeometry(w-0.14,0.1,d-0.14,1,0.05),
-        this._m(this.pal.slabTop,{roughness:0.7}));
+        new THREE.MeshStandardMaterial({map:ft, roughness:0.7, metalness:0.05, color:0xffffff}));
       top.position.set(f.p[0],0.0,f.p[1]);
       statics.push({geo:top.geometry, mat:top.material, cast:false, pos:[f.p[0],0.0,f.p[1]]});
       top.geometry.dispose();
@@ -192,6 +197,11 @@ export class World{
       this._m(this.pal.ring,{emissive:this.pal.ring, emissiveIntensity:1.2, roughness:0.3, metalness:0.3})
     );
     g.add(torus);
+    // target pad beneath the ring
+    const pad = new THREE.Mesh(new THREE.CylinderGeometry(0.34,0.42,0.08,24),
+      this._m(this.pal.ring,{emissive:this.pal.ring, emissiveIntensity:0.45, roughness:0.4}));
+    pad.position.y = -0.52;
+    g.add(pad);
     // sparkle sprites orbiting
     const spr = new THREE.Sprite(new THREE.SpriteMaterial({
       map:dotTexture(), color:0xffffff, transparent:true, opacity:0.9,
@@ -231,6 +241,17 @@ export class World{
     const line = new THREE.LineSegments(geo,
       new THREE.LineBasicMaterial({color:0x9fd8ff, transparent:true, opacity:0.7}));
     g.add(line);
+    // glowing corner brackets (merged — one draw call)
+    const cm = new THREE.MeshBasicMaterial({color:0x9fd8ff});
+    const cgs = [];
+    for(const [bx,bz,sx,sz] of [[cx-hw,cz-hd,1,1],[cx+hw,cz-hd,-1,1],[cx-hw,cz+hd,1,-1],[cx+hw,cz+hd,-1,-1]]){
+      const a = new THREE.BoxGeometry(0.36,0.045,0.08); a.translate(bx+sx*0.18, 0.04, bz);
+      const b = new THREE.BoxGeometry(0.08,0.045,0.36); b.translate(bx, 0.04, bz+sz*0.18);
+      cgs.push(a,b);
+    }
+    const cmerged = mergeGeometries(cgs, false);
+    cgs.forEach(c=>c.dispose());
+    if(cmerged) g.add(new THREE.Mesh(cmerged, cm));
     g.visible = true;
     this.zoneMarker = g;
     this.group.add(g);
@@ -251,6 +272,90 @@ export class World{
     for(const [x,y,z,s] of spots){
       statics.push({ geo:new RoundedBoxGeometry(s,s,s,2,s*0.18), mat, pos:[x,y,z], rotY:Math.random()*1.5 });
       statics.push({ geo:new THREE.SphereGeometry(s*0.22,10,8), mat:glowMat, pos:[x+s*0.3,y+s*0.42,z] });
+    }
+
+    this._themeProps(statics, level);
+  }
+
+  // theme-specific ornaments along the slab edges (merged into statics)
+  // + ONE small animated centerpiece per level for life
+  _themeProps(statics, level){
+    let minX=1e9,maxX=-1e9,minZ=1e9,maxZ=-1e9;
+    for(const f of level.floors){
+      minX=Math.min(minX,f.p[0]-f.s[0]/2); maxX=Math.max(maxX,f.p[0]+f.s[0]/2);
+      minZ=Math.min(minZ,f.p[1]-f.s[1]/2); maxZ=Math.max(maxZ,f.p[1]+f.s[1]/2);
+    }
+    const insetX = 0.42;
+    const dark  = this._m(0x2c3140,{roughness:0.7, metalness:0.2});
+    const glow  = this._m(this.pal.accent,{emissive:this.pal.accent, emissiveIntensity:1.1, roughness:0.35});
+    const zs = [minZ+1.3, (minZ+maxZ)/2, maxZ-1.3];
+    const sides = [minX+insetX, maxX-insetX];
+
+    if(level.theme === 'lab'){
+      // light posts: base + pole + glowing head
+      zs.forEach((z,i)=>{
+        const x = sides[i%2];
+        statics.push({geo:new THREE.CylinderGeometry(0.17,0.21,0.09,10), mat:dark, pos:[x,0.06,z]});
+        statics.push({geo:new THREE.CylinderGeometry(0.05,0.075,1.25,8),  mat:dark, pos:[x,0.7,z]});
+        statics.push({geo:new THREE.SphereGeometry(0.13,10,8),             mat:glow, pos:[x,1.42,z]});
+      });
+      // animated: hologram ring hovering over the last post
+      const holo = new THREE.Group();
+      holo.position.set(sides[0], 1.85, zs[0]);
+      const hr = new THREE.Mesh(new THREE.TorusGeometry(0.24,0.028,8,28),
+        new THREE.MeshBasicMaterial({color:this.pal.accent, transparent:true, opacity:0.85}));
+      holo.add(hr);
+      this.group.add(holo);
+      this.anims.push({fn:(t)=>{
+        holo.rotation.y = t*1.6;
+        holo.rotation.x = Math.sin(t*0.9)*0.35;
+        holo.position.y = 1.85 + Math.sin(t*2.2)*0.08;
+      }});
+    }else if(level.theme === 'candy'){
+      // lollipops: white stick + swirling head
+      const pop   = this._m(this.pal.accent,{roughness:0.32});
+      const pop2  = this._m(this.pal.wallCap,{roughness:0.4});
+      const stick = this._m(0xfff4f8,{roughness:0.5});
+      zs.forEach((z,i)=>{
+        const x = sides[i%2];
+        statics.push({geo:new THREE.CylinderGeometry(0.045,0.045,1.05,8), mat:stick, pos:[x,0.53,z]});
+        statics.push({geo:new THREE.TorusGeometry(0.22,0.1,8,18),  mat:(i%2?pop2:pop), pos:[x,1.2,z], rotY:0.4+i});
+        statics.push({geo:new THREE.SphereGeometry(0.07,8,6),      mat:stick, pos:[x,1.2,z]});
+      });
+      // animated: slowly spinning candy swirl
+      const spin = new THREE.Group();
+      spin.position.set(sides[1], 1.55, zs[2]);
+      const sw = new THREE.Mesh(new THREE.TorusGeometry(0.26,0.09,8,20), pop);
+      spin.add(sw);
+      this.group.add(spin);
+      this.anims.push({fn:(t)=>{ spin.rotation.z = t*1.8; spin.rotation.y = 0.5; }});
+    }else{
+      // clockwork gears standing on the slab edges (static, merged)
+      const gearM = this._m(this.pal.accent,{roughness:0.45, metalness:0.45});
+      for(let i=0;i<2;i++){
+        const x = sides[i], z = zs[i*2] ?? zs[0];
+        statics.push({geo:new THREE.CylinderGeometry(0.4,0.4,0.1,18), mat:gearM, pos:[x,0.55,z], rotX:Math.PI/2});
+        statics.push({geo:new THREE.CylinderGeometry(0.12,0.12,0.14,10), mat:dark, pos:[x,0.55,z], rotX:Math.PI/2});
+        for(let t=0;t<8;t++){
+          const a = t/8*Math.PI*2;
+          statics.push({geo:new THREE.BoxGeometry(0.13,0.13,0.09), mat:gearM,
+            pos:[x+Math.cos(a)*0.45, 0.55+Math.sin(a)*0.45, z]});
+        }
+      }
+      // animated: one live gear, slowly turning
+      const live = new THREE.Group();
+      live.position.set(sides[0], 0.62, zs[1]);
+      const lg = new THREE.Mesh(new THREE.CylinderGeometry(0.3,0.3,0.09,14), gearM);
+      lg.rotation.x = Math.PI/2;
+      live.add(lg);
+      for(let t=0;t<8;t++){
+        const a = t/8*Math.PI*2;
+        const tooth = new THREE.Mesh(new THREE.BoxGeometry(0.1,0.1,0.08), gearM);
+        tooth.position.set(Math.cos(a)*0.34, Math.sin(a)*0.34, 0);
+        live.add(tooth);
+      }
+      this.group.add(live);
+      this.anims.push({fn:(t,dt)=>{ live.rotation.z += dt*0.7; }});
     }
   }
 
@@ -310,7 +415,19 @@ export class World{
     }
     g.add(this._rb(0.07,0.16,1.3,this._m(color,{roughness:0.5}),-0.44,0.28,0,1,0.03));
     g.add(this._rb(0.07,0.16,1.3,this._m(color,{roughness:0.5}), 0.44,0.28,0,1,0.03));
-    this.anims.push({fn:(t,dt)=>{ tex.offset.y -= dt*0.9; }});
+    // rail bolts + intake glow strip
+    const boltM = this._m(0xd8dee8,{roughness:0.3, metalness:0.7});
+    for(const [bx,bz] of [[-0.44,-0.6],[0.44,-0.6],[-0.44,0.6],[0.44,0.6]]){
+      const b = shadow(new THREE.Mesh(new THREE.CylinderGeometry(0.035,0.035,0.05,8), boltM));
+      b.position.set(bx,0.375,bz); g.add(b);
+    }
+    const strip = new THREE.Mesh(new THREE.BoxGeometry(0.86,0.025,0.07),
+      new THREE.MeshStandardMaterial({color:0xffffff, emissive:color, emissiveIntensity:0.9, roughness:0.4}));
+    strip.position.set(0,0.245,-0.62); g.add(strip);
+    this.anims.push({fn:(t,dt)=>{
+      tex.offset.y -= dt*0.9;
+      strip.material.emissiveIntensity = 0.7+Math.sin(t*6)*0.3;
+    }});
   }
 
   _mod_bounce(g, color, extra){
@@ -327,6 +444,11 @@ export class World{
     const pad = this._rb(0.95,0.12,0.95,this._m(color,{roughness:0.35,metalness:0.1}),0,0.24,0,2,0.05);
     g.add(pad);
     extra.pad = pad;
+    // glowing rim ring on the pad edge
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.4,0.04,8,24),
+      new THREE.MeshStandardMaterial({color:0xffffff, emissive:color, emissiveIntensity:0.8, roughness:0.4}));
+    rim.rotation.x = Math.PI/2; rim.position.y = 0.31;
+    g.add(rim);
     pad.userData.squash = 0;
     this.anims.push({fn:(t,dt)=>{
       if(pad.userData.squash > 0){
@@ -345,6 +467,11 @@ export class World{
     const col = shadow(new THREE.Mesh(new THREE.CylinderGeometry(0.16,0.2,1.9,12), dark));
     col.position.set(0,0.95,0); g.add(col);
     const base = this._rb(0.9,0.14,0.9,dark,0,0.07,0); g.add(base);
+    // base glow ring
+    const bring = new THREE.Mesh(new THREE.TorusGeometry(0.46,0.035,8,28),
+      new THREE.MeshStandardMaterial({color:0xffffff, emissive:color, emissiveIntensity:0.8, roughness:0.4}));
+    bring.rotation.x = Math.PI/2; bring.position.y = 0.16;
+    g.add(bring);
     // helical trough from small boxes (merged)
     const segs = [];
     const total = Math.PI*2*1.15;
@@ -395,6 +522,11 @@ export class World{
       this._m(0xffffff,{emissive:color, emissiveIntensity:0.9, roughness:0.4}));
     mouth.position.set(0,0.62,0.42); mouth.rotation.x = 0.5;
     g.add(mouth);
+    // entry guide stripe on the dome base
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.1,0.02,0.5),
+      new THREE.MeshStandardMaterial({color:0xffffff, emissive:color, emissiveIntensity:0.9, roughness:0.4}));
+    stripe.position.set(0,0.51,0.18);
+    g.add(stripe);
     // arm indicator lights
     const lights = [];
     for(const s of [-1,1]){
@@ -413,6 +545,11 @@ export class World{
   _mod_magnet(g, color, extra){
     const dark = this._m(0x3c3450,{roughness:0.8});
     g.add(this._rb(0.5,0.4,0.5,dark,0,0.2,0));
+    // pedestal glow ring
+    const pring = new THREE.Mesh(new THREE.TorusGeometry(0.33,0.03,8,24),
+      new THREE.MeshStandardMaterial({color:0xffffff, emissive:color, emissiveIntensity:0.9, roughness:0.4}));
+    pring.rotation.x = Math.PI/2; pring.position.y = 0.42;
+    g.add(pring);
     const ring = shadow(new THREE.Mesh(new THREE.TorusGeometry(0.5,0.07,10,32),
       this._m(color,{roughness:0.35,metalness:0.4})));
     ring.position.set(0,0.9,0); g.add(ring);
@@ -448,6 +585,14 @@ export class World{
       const b = new RoundedBoxGeometry(0.55,0.1,0.2,1,0.04);
       b.applyMatrix4(m4);
       segs.push(b);
+      // guard rails riding the trough edges
+      for(const sx of [-0.28,0.28]){
+        const m4r = new THREE.Matrix4().compose(
+          new THREE.Vector3(sx,y+0.07,z), q, new THREE.Vector3(1,1,1));
+        const r = new RoundedBoxGeometry(0.06,0.15,0.18,1,0.03);
+        r.applyMatrix4(m4r);
+        segs.push(r);
+      }
     }
     const merged = mergeGeometries(segs, false);
     segs.forEach(s=>s.dispose());
@@ -486,6 +631,14 @@ export class World{
     muzzle.position.set(0,0.48,-0.5);
     g.add(muzzle);
     extra.muzzle = muzzle;
+    // stabilizer fins + breech knob
+    for(const sx of [-1,1]){
+      g.add(this._rb(0.06,0.3,0.46, this._m(color,{roughness:0.5,metalness:0.2}), sx*0.42, 0.3, 0.28, 1, 0.03));
+    }
+    const knob = shadow(new THREE.Mesh(new THREE.SphereGeometry(0.09,10,8),
+      this._m(0x2c3140,{roughness:0.4,metalness:0.5})));
+    knob.position.set(0,0.74,0.42);
+    g.add(knob);
     this.anims.push({fn:(t,dt)=>{
       muzzle.material.emissiveIntensity = 0.8+Math.sin(t*5)*0.4;
       if(extra.recoil > 0){
@@ -500,8 +653,7 @@ export class World{
     const extra = this.modMeshes.get(uid);
     if(!extra) return;
     if(what==='fire') extra.recoil = 1;
-    if(what==='bounce' && extra.pad) extra.pad.userData.squash = 1;
-    if(what==='arm') this.lastArm = what.side;
+    else if(what==='bounce' && extra.pad) extra.pad.userData.squash = 1;
   }
 
   // ========================================================
@@ -521,6 +673,11 @@ export class World{
       new THREE.MeshStandardMaterial({color:0xffffff, emissive:0xffffff, emissiveIntensity:0.7, roughness:0.3}));
     band.rotation.x = Math.PI/2;
     g.add(band);
+    // second band at a crossed angle for a livelier roll shimmer
+    const band2 = new THREE.Mesh(new THREE.TorusGeometry(BALL_R*0.99,0.016,6,24),
+      new THREE.MeshStandardMaterial({color:0xfff2d8, emissive:0xffe9c0, emissiveIntensity:0.55, roughness:0.3}));
+    band2.rotation.set(Math.PI/2, Math.PI/2, 0);
+    g.add(band2);
     // glow sprite
     const glow = new THREE.Sprite(new THREE.SpriteMaterial({map:dotTexture(), color:0xffc060,
       transparent:true, opacity:0.55, blending:THREE.AdditiveBlending, depthWrite:false}));
@@ -589,6 +746,11 @@ export class World{
       new THREE.MeshBasicMaterial({color:0xffffff}));
     arrow.rotation.x = Math.PI/2; arrow.position.set(0,0.06,-0.75);
     g.add(arrow);
+    // footprint slab — scaled to the module's real x/z size while dragging
+    const slab = new THREE.Mesh(new THREE.BoxGeometry(1,0.05,1),
+      new THREE.MeshBasicMaterial({color:0x7dffc8, transparent:true, opacity:0.22, depthWrite:false}));
+    slab.position.y = 0.035;
+    g.add(slab);
     g.visible = false;
     this.scene.add(g);
     return g;
@@ -654,4 +816,66 @@ function treadTexture(color){
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.repeat.set(1,2);
   return tex;
+}
+
+// per-theme vertical sky gradient (screen-space background texture)
+const _skyCache = {};
+function skyTexture(bg){
+  if(_skyCache[bg]) return _skyCache[bg];
+  const c = document.createElement('canvas'); c.width = 2; c.height = 256;
+  const ctx = c.getContext('2d');
+  const top = new THREE.Color(bg).multiplyScalar(1.45);
+  const mid = new THREE.Color(bg);
+  const bot = new THREE.Color(bg).multiplyScalar(0.5);
+  const g = ctx.createLinearGradient(0,0,0,256);
+  g.addColorStop(0,   '#'+top.getHexString());
+  g.addColorStop(0.55,'#'+mid.getHexString());
+  g.addColorStop(1,   '#'+bot.getHexString());
+  ctx.fillStyle = g; ctx.fillRect(0,0,2,256);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  _skyCache[bg] = t;
+  return t;
+}
+
+// per-theme slab-top pattern: lab grid / candy polka / clock dial ticks
+const _floorCache = {};
+function floorTexture(theme, baseColor){
+  if(_floorCache[theme]) return _floorCache[theme];
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#'+baseColor.toString(16).padStart(6,'0');
+  ctx.fillRect(0,0,256,256);
+  if(theme === 'lab'){
+    ctx.strokeStyle = 'rgba(255,255,255,0.07)'; ctx.lineWidth = 2;
+    for(let i=0;i<=4;i++){ const p = i*64;
+      ctx.beginPath(); ctx.moveTo(p,0); ctx.lineTo(p,256); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0,p); ctx.lineTo(256,p); ctx.stroke(); }
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    for(let x=0;x<=4;x++) for(let y=0;y<=4;y++){
+      ctx.beginPath(); ctx.arc(x*64,y*64,3,0,7); ctx.fill(); }
+  }else if(theme === 'candy'){
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    for(let x=0;x<4;x++) for(let y=0;y<4;y++){
+      if((x+y)%2) continue;
+      ctx.beginPath(); ctx.arc(x*64+32,y*64+32,9,0,7); ctx.fill(); }
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.lineWidth = 6;
+    for(let i=0;i<4;i++){
+      ctx.beginPath(); ctx.arc(i*64+32,128,40,0,7); ctx.stroke(); }
+  }else{
+    ctx.strokeStyle = 'rgba(0,0,0,0.14)'; ctx.lineWidth = 3;
+    for(let i=0;i<12;i++){ const a = i/12*Math.PI*2;
+      ctx.beginPath();
+      ctx.moveTo(128+Math.cos(a)*86,128+Math.sin(a)*86);
+      ctx.lineTo(128+Math.cos(a)*110,128+Math.sin(a)*110); ctx.stroke(); }
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(128,128,64,0,7); ctx.stroke();
+    ctx.beginPath(); ctx.arc(128,128,30,0,7); ctx.stroke();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 2;
+  _floorCache[theme] = t;
+  return t;
 }
