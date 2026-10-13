@@ -169,6 +169,7 @@ input:checked + .slider::before{ transform:translateX(22px); }
   position:relative; flex:0 0 auto; width:64px; height:64px; border-radius:15px;
   background:rgba(255,255,255,.1); border:1.5px solid rgba(255,255,255,.16);
   display:flex; align-items:center; justify-content:center; cursor:grab;
+  touch-action:none;                 /* drags must never become dock scrolls */
 }
 .dock-item canvas{ width:52px; height:52px; pointer-events:none; }
 .dock-item.spent{ opacity:.35; pointer-events:none; }
